@@ -1,0 +1,121 @@
+﻿Login-AzureRmAccount
+Connect-AzureRmAccount
+Set-AzureRmContext -Subscription 1d58bef5-54b2-4bb7-95af-32c0bbebc395
+
+##################################################################################   DTU Usage
+$Query = "AzureMetrics`
+| where ResourceProvider==`"MICROSOFT.SQL`" and ResourceId contains '/SUBSCRIPTIONS/1D58BEF5-54B2-4BB7-95AF-32C0BBEBC395/RESOURCEGROUPS/SQL/PROVIDERS/MICROSOFT.SQL/SERVERS/TRYMSSQL/DATABASES/SQLDB1'`
+| where MetricName=='dtu_consumption_percent'`
+| summarize avg = min_of(avg(Maximum), 100.0), max = min_of(max(Maximum), 100.0) by bin(TimeGenerated, time(14m))`
+| sort by TimeGenerated desc"
+
+
+$queryResults = Invoke-AzureRmOperationalInsightsQuery -WorkspaceId "a96001f8-9571-4433-a3e3-9253f7409da7" -Query $Query
+  $queryResults.Results
+
+
+##################################################################################### Usage
+
+##Get-AzureRmConsumptionUsageDetail -StartDate 2018-06-20 -EndDate 2018-07-25 
+
+  $reportedStartTime = "23-07-2018"
+  $reportedEndTime = "25-07-2018"
+  $granularity = "hourly"
+  $showDetails = $true
+  $path= "C:\1\test.csv"
+
+   Get-UsageAggregates `
+   -ReportedStartTime $reportedStartTime `
+   -ReportedEndTime $reportedEndTime `
+   -AggregationGranularity $granularity `
+   -ShowDetails:$showDetails #| Export-Csv -Path $path -Delimiter ";" -Append
+
+
+
+################################################################################## Price
+
+# Activate Azure Powershell module 
+Import-Module Azure
+# TODO - Replace the following values
+# =================================================
+$adTenant = "sergeypehotmail.onmicrosoft.com"
+# Set well-known client ID for Azure PowerShell
+$clientId = "89038ff2-260e-4727-a802-964dd1c19376" 
+# subscription guid 
+$SubscriptionId = '1d58bef5-54b2-4bb7-95af-32c0bbebc395'
+# Set redirect URI for Azure PowerShell
+$redirectUri = New-Object System.Uri('https://localhost/')
+# Azure on Internal subscription
+$OfferDurableId = 'MS-AZR-0063P' # Azure on Internal subscription
+# =================================================
+ 
+# Set Resource URI to Azure Service Management API
+$resourceAppIdURI = "https://management.azure.com/"
+# Set Authority to Azure AD Tenant
+$authority = "https://login.microsoftonline.com/$adTenant"
+# Create Authentication Context tied to Azure AD Tenant
+$authContext = New-Object Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext($authority)
+# Acquire token
+ 
+$authResult = $authContext.AcquireToken($resourceAppIdURI, $clientId, $redirectUri, "Auto")
+ 
+$ResHeaders = @{'authorization' = $authResult.CreateAuthorizationHeader()}
+ 
+$ApiVersion = '2015-06-01-preview'
+$Currency = 'USD'
+$Locale = 'en-US'
+$RegionInfo = 'US'
+$File = $env:TEMP + '\resourcecard.json'
+$OutputFilename = $env:TEMP + '\ratecardoutput.txt' # This is usually C:\Users\<username>\AppData\Local\Temp
+ 
+$ResourceCard = "https://management.azure.com/subscriptions/{5}/providers/Microsoft.Commerce/RateCard?api-version={0}&`$filter=OfferDurableId eq '{1}' and Currency eq '{2}' and Locale eq '{3}' and RegionInfo eq '{4}'" -f $ApiVersion, $OfferDurableId, $Currency, $Locale, $RegionInfo, $SubscriptionId
+ 
+Invoke-RestMethod -Uri $ResourceCard -Headers $ResHeaders -ContentType 'application/json' -OutFile $File
+$Resources = Get-Content -Raw -Path $File -Encoding UTF8 | ConvertFrom-Json
+ 
+# Insert the header line
+$strHeaderLine = "{0}!{1}!{2}!{3}!{4}!{5}!{6}!{7}!{8}" -f "MeterId", "MeterSubCategory", "MeterRegion", "MeterRates", "MeterCategory", "MeterName", "Unit", "EffectiveDate",  "IncludedQuantity"
+ 
+# Create the header in the output file 
+$strHeaderLine | Out-File $OutputFilename
+ 
+    # We create this loop to take care of tiered meter enteries in the table
+    foreach($meterObj in $Resources.Meters)
+    {
+        # convert the darn PSCustomeObject created by ConvertFrom_Json to our dictionary object
+        $meterRates = @{}
+         $meterObj.MeterRates | Get-Member -MemberType Properties | SELECT -exp "Name" | % {
+                $meterRates[$_] = ($meterObj.MeterRates | SELECT -exp $_)
+          }
+ 
+        $strLine = ""
+        
+        if ($meterRates.Count -gt 1)
+        {
+            $nCount = 0
+ 
+            foreach($meterRatePair in $meterRates.GetEnumerator() | Sort -Property Value -Descending)
+            {
+                $strLine += $($meterRatePair.Name) + "," + $($meterRatePair.Value)
+ 
+                if ($nCount -lt ($meterRates.Count -1))
+                {
+                    $strLine += ";";   
+                }
+                $nCount++; 
+            }
+        }
+        else
+        {
+            foreach($meterRatePair in $meterRates.GetEnumerator())
+            {
+                $strLine = $($meterRatePair.Value)  # this line will execute only once.
+            }
+        }         
+        $strOutputLine = "{0}!{1}!{2}!{3}!{4}!{5}!{6}!{7}!{8}" -f $meterObj.MeterId, $meterObj.MeterSubCategory, $meterObj.MeterRegion, $strLine, $meterObj.MeterCategory, $meterObj.MeterName,   $meterObj.Unit, $meterObj.EffectiveDate,  $meterObj.IncludedQuantity
+        $strOutputLine | Out-File $OutputFilename -Append
+    }
+ 
+##Remove-Item -Force -Path $File
+
+
